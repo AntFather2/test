@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>대학 합격·불합격 현황</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;font-family:"Malgun Gothic",system-ui,sans-serif;background:#f4f6f9;color:#222}
+header{background:#1f3a5f;color:#fff;padding:12px 20px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+header h1{font-size:18px;margin:0;flex:1}
+header button{background:#fff2;border:1px solid #fff6;color:#fff;padding:6px 12px;border-radius:6px;cursor:pointer}
+header button:hover{background:#fff4}
+main{max-width:1100px;margin:16px auto;padding:0 12px}
+.card{background:#fff;border-radius:8px;padding:16px;box-shadow:0 1px 3px #0002;margin-bottom:16px}
+.bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
+input,select,textarea{padding:7px 9px;border:1px solid #bbb;border-radius:6px;font:inherit}
+textarea{width:100%;min-height:120px}
+button.p{background:#1f3a5f;color:#fff;border:0;padding:7px 14px;border-radius:6px;cursor:pointer;font:inherit}
+button.s{background:#e8edf3;border:0;padding:5px 10px;border-radius:6px;cursor:pointer;font:inherit}
+button.d{background:#fde8e8;color:#a33;border:0;padding:5px 10px;border-radius:6px;cursor:pointer;font:inherit}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{border-bottom:1px solid #e3e6ea;padding:8px;text-align:left;vertical-align:top}
+th{background:#f0f3f7;position:sticky;top:0}
+.chip{display:block;margin:2px 0;padding:3px 8px;border-radius:6px;background:#f5f5f5;font-size:13px}
+.b{display:inline-block;padding:1px 7px;border-radius:10px;color:#fff;font-size:12px;margin-right:4px}
+.합격,.등록{background:#2e8b57}.추가합격{background:#2a7fb8}.불합격{background:#c0392b}.예비{background:#d68910}.미발표{background:#888}
+.stats span{margin-right:14px;font-size:14px}
+.muted{color:#777;font-size:13px}
+#msg{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:#333;color:#fff;padding:9px 18px;border-radius:8px;display:none}
+dialog{border:0;border-radius:10px;padding:20px;width:min(440px,94vw);box-shadow:0 4px 20px #0005}
+dialog label{display:block;margin:8px 0 3px;font-size:13px;color:#555}
+dialog input,dialog select{width:100%}
+.row{display:flex;gap:8px;justify-content:flex-end;margin-top:14px}
+.hide{display:none}
+</style>
+</head>
+<body>
+<header>
+  <h1>🎓 대학 합격·불합격 현황</h1>
+  <span id="who" class="muted" style="color:#cde"></span>
+  <button id="btnView">열람</button>
+  <button id="btnMine" class="hide">내 반 입력</button>
+  <button id="btnAdmin" class="hide">관리</button>
+  <button id="btnLogin">담임 로그인</button>
+  <button id="btnLogout" class="hide">로그아웃</button>
+</header>
+<main id="main"></main>
+<div id="msg"></div>
+
+<dialog id="dlgLogin"><form method="dialog" id="fLogin">
+  <h3 style="margin-top:0">로그인</h3>
+  <label>구분</label>
+  <select id="lgRole"><option value="teacher">담임교사</option><option value="admin">관리자</option></select>
+  <div id="lgClassWrap"><label>반</label><select id="lgClass"></select></div>
+  <label>비밀번호</label><input type="password" id="lgPw" autocomplete="current-password">
+  <div class="row"><button type="button" class="s" onclick="dlgLogin.close()">취소</button><button class="p">로그인</button></div>
+</form></dialog>
+
+<dialog id="dlgResult"><form method="dialog" id="fResult">
+  <h3 style="margin-top:0" id="rsTitle">결과 입력</h3>
+  <label>대학교</label><input id="rsUniv" required>
+  <label>학과/모집단위</label><input id="rsMajor">
+  <label>전형</label>
+  <select id="rsAdm"><option>수시-학생부교과</option><option>수시-학생부종합</option><option>수시-논술</option><option>수시-실기/실적</option><option>수시-기타</option><option>정시-가군</option><option>정시-나군</option><option>정시-다군</option><option>편입/기타</option></select>
+  <label>결과</label><select id="rsRes"></select>
+  <label>비고 (예비번호 등)</label><input id="rsNote">
+  <div class="row"><button type="button" class="s" onclick="dlgResult.close()">취소</button><button class="p">저장</button></div>
+</form></dialog>
+
+<script>
+const $=id=>document.getElementById(id);
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let info={classes:[],results:[]}, data=null, view='view', editing=null;
+let token=sessionStorage.token||'', role=sessionStorage.role||'', myClass=+sessionStorage.myClass||0;
+let filt={grade:'',cls:'',q:'',res:''};
+
+function toast(t){const m=$('msg');m.textContent=t;m.style.display='block';clearTimeout(toast.t);toast.t=setTimeout(()=>m.style.display='none',2500)}
+async function api(path,body){
+  const h={'Content-Type':'application/json'};
+  if(token)h['X-Token']=token; if(sessionStorage.viewer)h['X-Viewer']=sessionStorage.viewer;
+  const r=await fetch(path,{method:body===undefined?'GET':'POST',headers:h,body:body===undefined?undefined:JSON.stringify(body)});
+  const j=await r.json().catch(()=>({}));
+  if(!r.ok){ if(r.status===401&&token&&path!=='/api/login'){logout(true)} throw Object.assign(new Error(j.error||'오류'),{status:r.status}) }
+  return j;
+}
+const className=c=>`${c.grade}학년 ${c.num}반`;
+const clsById=id=>data.classes.find(c=>c.id===id)||info.classes.find(c=>c.id===id);
+
+async function load(){
+  info=await api('/api/info');
+  try{ data=await api('/api/data'); }
+  catch(e){
+    if(e.status===401&&!token){
+      const code=prompt('열람 코드를 입력하세요');
+      if(code===null){data=null;return render()}
+      sessionStorage.viewer=code; return load();
+    }
+    throw e;
+  }
+  render();
+}
+function updateHeader(){
+  $('who').textContent=role==='admin'?'관리자':role==='teacher'&&data?(className(clsById(myClass)||{grade:'?',num:'?'})+' 담임'):'';
+  $('btnLogin').classList.toggle('hide',!!token);
+  $('btnLogout').classList.toggle('hide',!token);
+  $('btnMine').classList.toggle('hide',role!=='teacher');
+  $('btnAdmin').classList.toggle('hide',role!=='admin');
+}
+function render(){
+  updateHeader();
+  if(!data){$('main').innerHTML='<div class="card">열람 코드가 필요합니다. 새로고침 후 다시 시도하세요.</div>';return}
+  if(view==='mine'&&role==='teacher')return renderEditor();
+  if(view==='admin'&&role==='admin')return renderAdmin();
+  view='view'; renderView();
+}
+
+/* ---------- 열람 ---------- */
+function resultsOf(sid){return data.results.filter(r=>r.studentId===sid)}
+function resultHtml(r,edit){
+  return `<span class="chip"><span class="b ${esc(r.result)}">${esc(r.result)}</span><b>${esc(r.univ)}</b> ${esc(r.major)} <span class="muted">· ${esc(r.admType)}${r.note?' · '+esc(r.note):''}</span>`+
+   (edit?` <button class="s" onclick="openResult(${r.studentId},${r.id})">수정</button> <button class="d" onclick="delResult(${r.id})">삭제</button>`:'')+`</span>`;
+}
+function renderView(){
+  const grades=[...new Set(data.classes.map(c=>c.grade))].sort();
+  const classes=data.classes.filter(c=>!filt.grade||c.grade==filt.grade).sort((a,b)=>a.grade-b.grade||a.num-b.num);
+  const q=filt.q.trim().toLowerCase();
+  const rows=[];
+  for(const st of data.students){
+    const c=clsById(st.classId); if(!c)continue;
+    if(filt.grade&&c.grade!=filt.grade)continue; if(filt.cls&&st.classId!=filt.cls)continue;
+    let rs=resultsOf(st.id);
+    if(filt.res)rs=rs.filter(r=>r.result===filt.res);
+    if(q){const nameHit=st.name.toLowerCase().includes(q); if(!nameHit)rs=rs.filter(r=>(r.univ+r.major).toLowerCase().includes(q)); if(!nameHit&&!rs.length)continue}
+    if(filt.res&&!rs.length)continue;
+    rows.push({c,st,rs});
+  }
+  rows.sort((a,b)=>a.c.grade-b.c.grade||a.c.num-b.c.num||a.st.no-b.st.no);
+  const all=rows.flatMap(x=>x.rs); const cnt=k=>all.filter(r=>r.result===k).length;
+  $('main').innerHTML=`<div class="card">
+   <div class="bar">
+    <select id="fG"><option value="">전체 학년</option>${grades.map(g=>`<option ${filt.grade==g?'selected':''} value="${g}">${g}학년</option>`).join('')}</select>
+    <select id="fC"><option value="">전체 반</option>${classes.map(c=>`<option ${filt.cls==c.id?'selected':''} value="${c.id}">${className(c)}</option>`).join('')}</select>
+    <select id="fR"><option value="">전체 결과</option>${info.results.map(r=>`<option ${filt.res===r?'selected':''}>${r}</option>`).join('')}</select>
+    <input id="fQ" placeholder="이름 / 대학 / 학과 검색" value="${esc(filt.q)}" style="flex:1;min-width:160px">
+   </div>
+   <div class="stats bar"><span>학생 <b>${rows.length}</b>명</span><span>합격 <b>${cnt('합격')+cnt('추가합격')+cnt('등록')}</b></span><span>불합격 <b>${cnt('불합격')}</b></span><span>예비 <b>${cnt('예비')}</b></span></div>
+   <table><thead><tr><th>반-번호</th><th>이름</th><th>지원 결과</th></tr></thead><tbody>
+   ${rows.map(({c,st,rs})=>`<tr><td>${c.grade}-${c.num}-${st.no}</td><td>${esc(st.name)}</td><td>${rs.length?rs.map(r=>resultHtml(r,false)).join(''):'<span class="muted">미입력</span>'}</td></tr>`).join('')||'<tr><td colspan="3" class="muted">표시할 자료가 없습니다.</td></tr>'}
+   </tbody></table></div>`;
+  $('fG').onchange=e=>{filt.grade=e.target.value;filt.cls='';renderView()};
+  $('fC').onchange=e=>{filt.cls=e.target.value;renderView()};
+  $('fR').onchange=e=>{filt.res=e.target.value;renderView()};
+  $('fQ').oninput=e=>{filt.q=e.target.value;const p=e.target.selectionStart;renderView();const n=$('fQ');n.focus();n.setSelectionRange(p,p)};
+}
+
+/* ---------- 담임 입력 ---------- */
+function renderEditor(){
+  const c=clsById(myClass); if(!c){$('main').innerHTML='<div class="card">반 정보를 찾을 수 없습니다.</div>';return}
+  const sts=data.students.filter(s=>s.classId===myClass).sort((a,b)=>a.no-b.no);
+  $('main').innerHTML=`<div class="card"><h3 style="margin-top:0">${className(c)} 입력</h3>
+   <table><thead><tr><th>번호</th><th>이름</th><th>지원 결과</th><th></th></tr></thead><tbody>
+   ${sts.map(s=>`<tr><td>${s.no}</td><td>${esc(s.name)}</td><td>${resultsOf(s.id).map(r=>resultHtml(r,true)).join('')||'<span class="muted">미입력</span>'}</td>
+     <td style="white-space:nowrap"><button class="p" onclick="openResult(${s.id})">+ 추가</button> <button class="d" onclick="delStudent(${s.id})">학생삭제</button></td></tr>`).join('')||'<tr><td colspan="4" class="muted">등록된 학생이 없습니다. 아래에서 추가하세요.</td></tr>'}
+   </tbody></table></div>
+   <div class="card"><h4 style="margin-top:0">학생 추가</h4><p class="muted">한 줄에 한 명. "번호 이름" 또는 "이름"만 입력 (엑셀에서 복사·붙여넣기 가능).</p>
+   <textarea id="stText" placeholder="1 김철수&#10;2 이영희"></textarea><div class="row"><button class="p" id="stAdd">학생 추가</button></div></div>`;
+  $('stAdd').onclick=async()=>{try{const r=await api('/api/students',{classId:myClass,text:$('stText').value});toast(r.added+'명 추가됨');await load()}catch(e){toast(e.message)}};
+}
+function openResult(sid,rid){
+  editing={sid,rid};
+  const r=rid?data.results.find(x=>x.id===rid):null;
+  $('rsTitle').textContent=(rid?'수정':'추가')+' - '+data.students.find(s=>s.id===sid).name;
+  $('rsRes').innerHTML=info.results.map(x=>`<option>${x}</option>`).join('');
+  $('rsUniv').value=r?.univ||'';$('rsMajor').value=r?.major||'';$('rsAdm').value=r?.admType||'수시-학생부종합';$('rsRes').value=r?.result||'합격';$('rsNote').value=r?.note||'';
+  dlgResult.showModal();
+}
+$('fResult').onsubmit=async()=>{
+  try{await api('/api/result',{id:editing.rid||0,studentId:editing.sid,univ:$('rsUniv').value,major:$('rsMajor').value,admType:$('rsAdm').value,result:$('rsRes').value,note:$('rsNote').value});toast('저장되었습니다');await load()}
+  catch(e){toast(e.message)}
+};
+async function delResult(id){if(!confirm('이 기록을 삭제할까요?'))return;try{await api('/api/result/delete',{id});await load()}catch(e){toast(e.message)}}
+async function delStudent(id){if(!confirm('학생과 모든 결과 기록이 삭제됩니다. 계속할까요?'))return;try{await api('/api/student/delete',{id});await load()}catch(e){toast(e.message)}}
+
+/* ---------- 관리자 ---------- */
+function renderAdmin(){
+  const cl=[...data.classes].sort((a,b)=>a.grade-b.grade||a.num-b.num);
+  $('main').innerHTML=`<div class="card"><h3 style="margin-top:0">반 관리</h3>
+   <div class="bar"><input id="nG" type="number" min="1" placeholder="학년" style="width:80px"><input id="nN" type="number" min="1" placeholder="반" style="width:80px">
+   <input id="nP" placeholder="담임 초기 비밀번호(4자 이상)"><button class="p" id="addCls">반 추가</button></div>
+   <table><thead><tr><th>반</th><th>학생 수</th><th></th></tr></thead><tbody>
+   ${cl.map(c=>`<tr><td>${className(c)}</td><td>${data.students.filter(s=>s.classId===c.id).length}</td><td><button class="s" onclick="setPw(${c.id})">비밀번호 변경</button> <button class="d" onclick="delCls(${c.id})">삭제</button></td></tr>`).join('')||'<tr><td colspan="3" class="muted">반을 추가하세요.</td></tr>'}
+   </tbody></table></div>
+   <div class="card"><h3 style="margin-top:0">설정</h3>
+   <div class="bar"><label>열람 코드(비우면 누구나 열람)</label><input id="sV" placeholder="열람 코드"><button class="p" id="saveV">저장</button></div>
+   <div class="bar"><label>관리자 비밀번호 변경</label><input id="sA" type="password" placeholder="새 비밀번호(6자 이상)"><button class="p" id="saveA">변경</button></div>
+   <p class="muted">열람 코드를 설정하면 코드를 아는 제3자만 열람할 수 있습니다. 학생 개인정보이므로 설정을 권장합니다.</p></div>`;
+  $('addCls').onclick=async()=>{try{await api('/api/admin/class',{grade:$('nG').value,num:$('nN').value,password:$('nP').value});toast('추가됨');await load()}catch(e){toast(e.message)}};
+  $('saveV').onclick=async()=>{try{const v=$('sV').value;await api('/api/admin/settings',{viewerCode:v});toast('저장됨')}catch(e){toast(e.message)}};
+  $('saveA').onclick=async()=>{try{await api('/api/admin/settings',{adminPassword:$('sA').value});$('sA').value='';toast('변경됨')}catch(e){toast(e.message)}};
+}
+async function setPw(id){const p=prompt('새 비밀번호(4자 이상)');if(!p)return;try{await api('/api/admin/class/password',{classId:id,password:p});toast('변경됨')}catch(e){toast(e.message)}}
+async function delCls(id){if(!confirm('반과 소속 학생, 결과 기록이 모두 삭제됩니다. 계속할까요?'))return;try{await api('/api/admin/class/delete',{classId:id});await load()}catch(e){toast(e.message)}}
+
+/* ---------- 로그인 ---------- */
+function logout(silent){token=role='';myClass=0;sessionStorage.removeItem('token');sessionStorage.removeItem('role');sessionStorage.removeItem('myClass');view='view';if(!silent)toast('로그아웃되었습니다');load()}
+$('btnView').onclick=()=>{view='view';render()};
+$('btnMine').onclick=()=>{view='mine';render()};
+$('btnAdmin').onclick=()=>{view='admin';render()};
+$('btnLogout').onclick=()=>logout();
+$('btnLogin').onclick=()=>{
+  $('lgClass').innerHTML=info.classes.slice().sort((a,b)=>a.grade-b.grade||a.num-b.num).map(c=>`<option value="${c.id}">${className(c)}</option>`).join('');
+  $('lgPw').value='';dlgLogin.showModal();$('lgPw').focus();
+};
+$('lgRole').onchange=()=>$('lgClassWrap').classList.toggle('hide',$('lgRole').value==='admin');
+$('fLogin').onsubmit=async()=>{
+  try{
+    const r=await api('/api/login',{role:$('lgRole').value,classId:$('lgClass').value,password:$('lgPw').value});
+    token=r.token;role=r.role;myClass=r.classId||0;
+    sessionStorage.token=token;sessionStorage.role=role;sessionStorage.myClass=myClass;
+    view=role==='admin'?'admin':'mine';await load();
+  }catch(e){toast(e.message);setTimeout(()=>dlgLogin.showModal(),0)}
+};
+load().catch(e=>toast(e.message));
+</script>
+</body>
+</html>
